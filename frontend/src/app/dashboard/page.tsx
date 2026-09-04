@@ -1,0 +1,338 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Pencil, Plus, Search } from "lucide-react";
+import { Protected } from "@/components/Protected";
+import { StatusBadge, StatusDot } from "@/components/StatusDot";
+import { api, Dashboard, Website } from "@/lib/api";
+import {
+  displayStatus,
+  formatMs,
+  statusLabel,
+  statusRank,
+} from "@/lib/format";
+
+type Filter = "all" | "down" | "failing" | "slow" | "up";
+
+export default function DashboardPage() {
+  const [data, setData] = useState<Dashboard | null>(null);
+  const [error, setError] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
+
+  const load = useCallback(async () => {
+    try {
+      const dash = await api.dashboard();
+      setData(dash);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load");
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 20000);
+    return () => clearInterval(id);
+  }, [load]);
+
+  const failingCount = useMemo(
+    () => (data ? data.websites.filter((w) => displayStatus(w) === "FAILING").length : 0),
+    [data],
+  );
+
+  const problemCount = useMemo(
+    () => (data ? data.down + failingCount + data.slow : 0),
+    [data, failingCount],
+  );
+
+  const filtered = useMemo(() => {
+    if (!data) return [] as Website[];
+    const q = query.trim().toLowerCase();
+    return [...data.websites]
+      .filter((site) => {
+        const status = displayStatus(site);
+        if (filter === "down" && status !== "DOWN") return false;
+        if (filter === "failing" && status !== "FAILING") return false;
+        if (filter === "slow" && status !== "SLOW") return false;
+        if (filter === "up" && status !== "UP") return false;
+        if (!q) return true;
+        return (
+          site.name.toLowerCase().includes(q) ||
+          site.url.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const rank = statusRank(displayStatus(a)) - statusRank(displayStatus(b));
+        if (rank !== 0) return rank;
+        return a.name.localeCompare(b.name);
+      });
+  }, [data, filter, query]);
+
+  return (
+    <Protected>
+      <div className="animate-rise space-y-6 sm:space-y-8">
+        <div className="flex flex-wrap items-end justify-between gap-2 sm:gap-4">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink-mute sm:text-xs">
+              Overview
+            </p>
+            <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+              Dashboard
+            </h1>
+          </div>
+          <p className="text-xs text-ink-mute sm:text-sm">Auto-refreshes every 20s</p>
+        </div>
+
+        {error && <p className="text-sm text-alert-down">{error}</p>}
+
+        {data && (
+          <>
+            {problemCount > 0 && (
+              <div className="rounded-2xl border border-alert-down/20 bg-red-50 px-4 py-3 text-sm text-alert-down sm:px-5 sm:py-4">
+                <span className="font-semibold">
+                  {data.down} down
+                  {failingCount ? ` · ${failingCount} failing` : ""}
+                  {data.slow ? ` · ${data.slow} slow` : ""}
+                </span>
+                <span className="text-alert-down/80"> — filter below to focus on problems.</span>
+              </div>
+            )}
+
+            <section className="surface rounded-2xl p-4 shadow-soft sm:rounded-3xl sm:p-6 md:p-8">
+              <div className="grid grid-cols-2 gap-2 sm:gap-4 md:grid-cols-5">
+                <StatButton
+                  label="Websites"
+                  value={String(data.total)}
+                  active={filter === "all"}
+                  onClick={() => setFilter("all")}
+                />
+                <StatButton
+                  label="UP"
+                  value={String(data.up)}
+                  tone="up"
+                  active={filter === "up"}
+                  onClick={() => setFilter("up")}
+                />
+                <StatButton
+                  label="DOWN"
+                  value={String(data.down)}
+                  tone="down"
+                  active={filter === "down"}
+                  onClick={() => setFilter("down")}
+                />
+                <StatButton
+                  label="SLOW"
+                  value={String(data.slow)}
+                  tone="slow"
+                  active={filter === "slow"}
+                  onClick={() => setFilter("slow")}
+                />
+                <div className="col-span-2 rounded-2xl bg-white/50 px-3 py-2.5 sm:px-4 sm:py-3 md:col-span-1">
+                  <p className="text-[11px] uppercase tracking-wide text-ink-mute sm:text-xs">
+                    Overall uptime
+                  </p>
+                  <p className="mt-1 font-display text-2xl font-semibold text-ink sm:mt-2 sm:text-3xl">
+                    {data.overall_uptime.toFixed(2)}%
+                  </p>
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <div className="mb-3 flex items-center justify-between gap-3 sm:mb-4">
+                <h2 className="font-display text-lg font-semibold text-ink sm:text-xl">Websites</h2>
+                <Link href="/websites/new" className="btn-secondary hidden h-9 px-3 text-sm sm:inline-flex">
+                  <Plus className="h-4 w-4" />
+                  Add site
+                </Link>
+              </div>
+
+              <div className="mb-4 space-y-3">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-mute" />
+                  <input
+                    className="input !pl-10"
+                    placeholder="Search by name or URL…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </div>
+                <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
+                  {(
+                    [
+                      ["all", "All"],
+                      ["down", "Down"],
+                      ["failing", "Failing"],
+                      ["slow", "Slow"],
+                      ["up", "Up"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={
+                        filter === value
+                          ? "btn-primary h-9 shrink-0 px-3 text-sm"
+                          : "btn-secondary h-9 shrink-0 px-3 text-sm"
+                      }
+                      onClick={() => setFilter(value)}
+                    >
+                      {label}
+                      {value === "failing" && failingCount > 0 ? ` (${failingCount})` : ""}
+                      {value === "down" && data.down > 0 ? ` (${data.down})` : ""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {data.websites.length === 0 ? (
+                <div className="surface rounded-2xl px-5 py-12 text-center shadow-soft sm:rounded-3xl sm:px-6 sm:py-14">
+                  <p className="font-display text-lg text-ink">No projects yet</p>
+                  <p className="mt-2 text-sm text-ink-soft">
+                    Add jobneedx.com, staging, APIs — anything you need watched.
+                  </p>
+                  <Link href="/websites/new" className="btn-primary mt-6 inline-flex">
+                    Add your first site
+                  </Link>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div className="surface rounded-2xl px-5 py-10 text-center text-sm text-ink-mute shadow-soft sm:rounded-3xl sm:px-6">
+                  No websites match this filter.
+                </div>
+              ) : (
+                <div className="surface overflow-hidden rounded-2xl shadow-soft sm:rounded-3xl">
+                  <ul className="divide-y divide-ink/5">
+                    {filtered.map((site) => {
+                      const status = displayStatus(site);
+                      const isProblem = status === "DOWN" || status === "FAILING";
+                      const badgeDetail =
+                        status === "FAILING"
+                          ? `· ${site.consecutive_failures} fail${site.consecutive_failures === 1 ? "" : "s"}`
+                          : undefined;
+                      return (
+                        <li key={site.id}>
+                          <div
+                            className={
+                              isProblem
+                                ? "bg-red-50/70 transition hover:bg-red-50"
+                                : status === "SLOW"
+                                  ? "bg-amber-50/50 transition hover:bg-amber-50/80"
+                                  : "transition hover:bg-white/70"
+                            }
+                          >
+                            <div className="flex items-start gap-2 px-3 py-3.5 sm:items-center sm:gap-3 sm:px-5 sm:py-4">
+                              <Link
+                                href={`/websites/${site.id}`}
+                                className="flex min-w-0 flex-1 items-start gap-3 sm:items-center sm:gap-4"
+                              >
+                                <StatusDot status={status} className="mt-1.5 h-3 w-3 shrink-0 sm:mt-0" />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="truncate font-medium text-ink">{site.name}</p>
+                                    <StatusBadge
+                                      status={status}
+                                      label={statusLabel(status)}
+                                      detail={badgeDetail}
+                                    />
+                                  </div>
+                                  <p className="mt-0.5 truncate font-mono text-xs text-ink-mute">
+                                    {site.url.replace(/^https?:\/\//, "")}
+                                  </p>
+                                  {isProblem && site.last_error ? (
+                                    <p className="mt-1 truncate text-xs text-alert-down">{site.last_error}</p>
+                                  ) : null}
+                                  <p className="mt-1 text-xs text-ink-mute sm:hidden">
+                                    <span
+                                      className={
+                                        isProblem
+                                          ? "font-semibold text-alert-down"
+                                          : status === "SLOW"
+                                            ? "font-semibold text-alert-slow"
+                                            : "text-ink"
+                                      }
+                                    >
+                                      {status === "DOWN" ? "DOWN" : formatMs(site.last_response_time)}
+                                    </span>
+                                    {" · "}
+                                    {site.uptime_percent.toFixed(2)}% uptime
+                                  </p>
+                                </div>
+                                <div className="hidden shrink-0 text-right sm:block">
+                                  <p
+                                    className={
+                                      isProblem
+                                        ? "font-mono text-sm font-semibold text-alert-down"
+                                        : status === "SLOW"
+                                          ? "font-mono text-sm font-semibold text-alert-slow"
+                                          : "font-mono text-sm text-ink"
+                                    }
+                                  >
+                                    {status === "DOWN" ? "DOWN" : formatMs(site.last_response_time)}
+                                  </p>
+                                  <p className="text-xs text-ink-mute">
+                                    {site.uptime_percent.toFixed(2)}% uptime
+                                  </p>
+                                </div>
+                              </Link>
+                              <Link
+                                href={`/websites/${site.id}/edit`}
+                                className="btn-icon shrink-0"
+                                aria-label={`Edit ${site.name}`}
+                                title="Edit"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Link>
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </div>
+    </Protected>
+  );
+}
+
+function StatButton({
+  label,
+  value,
+  tone,
+  active,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  tone?: "up" | "down" | "slow";
+  active?: boolean;
+  onClick: () => void;
+}) {
+  const color =
+    tone === "up"
+      ? "text-alert-up"
+      : tone === "down"
+        ? "text-alert-down"
+        : tone === "slow"
+          ? "text-alert-slow"
+          : "text-ink";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        active
+          ? "rounded-2xl border border-teal/30 bg-teal-soft/70 px-3 py-2.5 text-left transition sm:px-4 sm:py-3"
+          : "rounded-2xl border border-transparent bg-white/40 px-3 py-2.5 text-left transition hover:bg-white/70 sm:px-4 sm:py-3"
+      }
+    >
+      <p className="text-[11px] uppercase tracking-wide text-ink-mute sm:text-xs">{label}</p>
+      <p className={`mt-1 font-display text-2xl font-semibold sm:mt-2 sm:text-3xl ${color}`}>{value}</p>
+    </button>
+  );
+}

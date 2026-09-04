@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.next/
+.DS_Store
+*.log
+postgres_data/
+.deploy.env
+deploy/.env.production
