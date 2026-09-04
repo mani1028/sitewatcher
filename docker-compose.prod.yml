@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: sitewatch
-      POSTGRES_PASSWORD: e3b6f7f4de3a9c504a2b37bf9041695b
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: sitewatch
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -27,9 +27,9 @@ services:
     build: ./backend
     env_file: .env.production
     environment:
-      DATABASE_URL: postgresql+asyncpg://sitewatch:e3b6f7f4de3a9c504a2b37bf9041695b@postgres:5432/sitewatch
+      DATABASE_URL: postgresql+asyncpg://sitewatch:${POSTGRES_PASSWORD}@postgres:5432/sitewatch
       REDIS_URL: redis://redis:6379/0
-      FRONTEND_URL: https://sitewatch.ai4bzr.com
+      FRONTEND_URL: ${FRONTEND_URL:-https://sitewatch.ai4bzr.com}
     ports:
       - "127.0.0.1:18080:8000"
     depends_on:
@@ -48,11 +48,11 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: https://sitewatch.ai4bzr.com
+        NEXT_PUBLIC_API_URL: ${FRONTEND_URL:-https://sitewatch.ai4bzr.com}
     ports:
       - "127.0.0.1:13000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: https://sitewatch.ai4bzr.com
+      NEXT_PUBLIC_API_URL: ${FRONTEND_URL:-https://sitewatch.ai4bzr.com}
     depends_on:
       backend:
         condition: service_healthy
