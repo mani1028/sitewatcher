@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
@@ -10,21 +11,46 @@ from app.auth import hash_password
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.models import SettingsRow
-from app.monitor import cleanup_old_checks, run_due_checks, run_ssl_checks
+from app.monitor import (
+    cleanup_old_checks,
+    run_due_checks,
+    run_ssl_checks,
+    send_client_status_report,
+)
 from app.routers import router
 
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+logging.getLogger("apscheduler.executors.default").setLevel(logging.WARNING)
+logging.getLogger("apscheduler.scheduler").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 settings = get_settings()
 scheduler = AsyncIOScheduler()
 
 
 async def ensure_schema() -> None:
-    """Widen columns for multi-recipient alerts on existing databases."""
+    """Apply lightweight schema upgrades on existing databases."""
     statements = [
         "ALTER TABLE settings ALTER COLUMN alert_email TYPE VARCHAR(2000)",
         "ALTER TABLE notifications ALTER COLUMN sent_to TYPE VARCHAR(2000)",
+        "ALTER TABLE websites ADD COLUMN IF NOT EXISTS category VARCHAR(32) DEFAULT 'website'",
+        "ALTER TABLE websites ADD COLUMN IF NOT EXISTS owner VARCHAR(32) DEFAULT 'inhouse'",
+        "ALTER TABLE websites ADD COLUMN IF NOT EXISTS health_url VARCHAR(500)",
+        # Heuristic backfill for existing rows still on default
+        """
+        UPDATE websites SET category = 'portal'
+        WHERE (category IS NULL OR category = 'website')
+          AND (url ILIKE '%://portal.%' OR url ILIKE '%/portal.%' OR name ILIKE '%portal%')
+        """,
+        """
+        UPDATE websites SET category = 'microservice'
+        WHERE (category IS NULL OR category = 'website')
+          AND (url ILIKE '%api.%' OR url ILIKE '%://api%' OR name ILIKE '%api%'
+               OR url ILIKE '%filemanager%' OR name ILIKE '%filemanager%')
+        """,
+        "UPDATE websites SET category = 'website' WHERE category IS NULL OR category = ''",
+        "UPDATE websites SET owner = 'inhouse' WHERE owner IS NULL OR owner = ''",
     ]
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -32,7 +58,6 @@ async def ensure_schema() -> None:
             try:
                 await conn.execute(text(stmt))
             except Exception:
-                # Column already wide enough, or table not ready yet
                 pass
 
 
@@ -71,9 +96,23 @@ async def lifespan(_: FastAPI):
 
     scheduler.add_job(run_due_checks, "interval", seconds=settings.scheduler_tick_seconds, id="due_checks", max_instances=1)
     scheduler.add_job(run_ssl_checks, "interval", hours=6, id="ssl_checks", max_instances=1)
-    scheduler.add_job(cleanup_old_checks, "cron", hour=3, minute=15, id="cleanup", max_instances=1)
+    scheduler.add_job(cleanup_old_checks, "interval", hours=1, id="cleanup", max_instances=1)
+    scheduler.add_job(
+        send_client_status_report,
+        CronTrigger(hour=10, minute=0, timezone="Asia/Kolkata"),
+        kwargs={"slot": "morning"},
+        id="client_report_morning",
+        max_instances=1,
+    )
+    scheduler.add_job(
+        send_client_status_report,
+        CronTrigger(hour=18, minute=0, timezone="Asia/Kolkata"),
+        kwargs={"slot": "evening"},
+        id="client_report_evening",
+        max_instances=1,
+    )
     scheduler.start()
-    logger.info("SiteWatch monitor started")
+    logger.info("SiteWatch monitor started (client reports 10:00 & 18:00 IST)")
     yield
     scheduler.shutdown(wait=False)
     await engine.dispose()

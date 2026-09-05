@@ -29,6 +29,17 @@ from app.schemas import (
 router = APIRouter()
 
 
+def _normalize_optional_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if not text.startswith(("http://", "https://")):
+        text = f"https://{text}"
+    return text.rstrip("/")
+
+
 def serialize_incident(incident: Incident, website: Website | None = None) -> IncidentOut:
     site = website or getattr(incident, "website", None)
     return IncidentOut(
@@ -110,10 +121,26 @@ async def create_website(
     url = payload.url.strip()
     if not url.startswith(("http://", "https://")):
         url = f"https://{url}"
+    url = url.rstrip("/")
+
+    existing = await db.scalar(select(Website).where(Website.url == url))
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Website already exists: {existing.name}")
+
+    # Also block same host with/without trailing slash variants stored differently
+    host_key = url.lower().removeprefix("https://").removeprefix("http://")
+    rows = list((await db.execute(select(Website))).scalars().all())
+    for row in rows:
+        row_key = row.url.lower().removeprefix("https://").removeprefix("http://").rstrip("/")
+        if row_key == host_key:
+            raise HTTPException(status_code=400, detail=f"Website already exists: {row.name}")
 
     website = Website(
         name=payload.name.strip(),
         url=url,
+        health_url=_normalize_optional_url(payload.health_url),
+        category=payload.category,
+        owner=payload.owner,
         check_interval=payload.check_interval,
         timeout=payload.timeout,
         expected_status=payload.expected_status,
@@ -154,14 +181,16 @@ async def update_website(
         url = data["url"].strip()
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
-        data["url"] = url
+        data["url"] = url.rstrip("/")
+    if "health_url" in data:
+        data["health_url"] = _normalize_optional_url(data.get("health_url"))
     if "name" in data and data["name"]:
         data["name"] = data["name"].strip()
 
     interval_changed = "check_interval" in data and data["check_interval"] != website.check_interval
     for key, value in data.items():
         setattr(website, key, value)
-    if interval_changed or data.get("enabled") is True:
+    if interval_changed or data.get("enabled") is True or "health_url" in data or "url" in data:
         website.next_check_at = datetime.now(timezone.utc)
 
     await db.commit()

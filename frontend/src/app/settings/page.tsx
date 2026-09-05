@@ -231,7 +231,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="mt-3 grid gap-3">
-                  <Field label="Username">
+                  <Field label="Username (Gmail login)">
                     <input
                       className="input"
                       value={settings.smtp_user}
@@ -258,13 +258,16 @@ export default function SettingsPage() {
                       </button>
                     </div>
                   </Field>
-                  <Field label="From">
+                  <Field label="Sender name (shown in inbox)">
                     <input
                       className="input"
-                      placeholder="SiteWatch <alerts@gmail.com>"
+                      placeholder='SiteWatch <you@gmail.com>'
                       value={settings.smtp_from}
                       onChange={(e) => setSettings({ ...settings, smtp_from: e.target.value })}
                     />
+                    <span className="mt-1.5 block text-xs text-ink-mute">
+                      Recipients see the name, e.g. <span className="font-medium text-ink-soft">SiteWatch</span>
+                    </span>
                   </Field>
                 </div>
 

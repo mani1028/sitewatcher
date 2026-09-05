@@ -38,12 +38,30 @@ class IncidentStatus(str, enum.Enum):
     RESOLVED = "resolved"
 
 
+class SiteCategory(str, enum.Enum):
+    PORTAL = "portal"
+    WEBSITE = "website"
+    MICROSERVICE = "microservice"
+    OTHER = "other"
+
+
+class SiteOwner(str, enum.Enum):
+    """Who the site belongs to — separate from technical type (category)."""
+
+    INHOUSE = "inhouse"
+    CLIENT = "client"
+
+
 class Website(Base):
     __tablename__ = "websites"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     url: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Optional API/backend health endpoint — both url and health_url must succeed
+    health_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    category: Mapped[str] = mapped_column(String(32), default=SiteCategory.WEBSITE.value, index=True)
+    owner: Mapped[str] = mapped_column(String(32), default=SiteOwner.INHOUSE.value, index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     check_interval: Mapped[int] = mapped_column(Integer, default=60)
     timeout: Mapped[int] = mapped_column(Integer, default=10)

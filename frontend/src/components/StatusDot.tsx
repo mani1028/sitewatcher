@@ -4,6 +4,7 @@ const DOT: Record<string, string> = {
   UP: "bg-alert-up",
   DOWN: "bg-alert-down",
   FAILING: "bg-alert-down",
+  RECOVERING: "bg-alert-slow",
   SLOW: "bg-alert-slow",
   MAINTENANCE: "bg-ink-mute",
   UNKNOWN: "bg-ink-mute",
@@ -20,7 +21,7 @@ export function StatusDot({
   pulse?: boolean;
   className?: string;
 }) {
-  const shouldPulse = pulse || status === "DOWN" || status === "FAILING";
+  const shouldPulse = pulse || status === "DOWN" || status === "FAILING" || status === "RECOVERING";
   return (
     <span
       className={clsx(
@@ -38,6 +39,7 @@ const BADGE: Record<string, string> = {
   UP: "bg-teal-soft text-teal",
   DOWN: "bg-red-100 text-alert-down",
   FAILING: "bg-red-100 text-alert-down",
+  RECOVERING: "bg-amber-100 text-alert-slow",
   SLOW: "bg-amber-100 text-alert-slow",
   MAINTENANCE: "bg-mist-deep text-ink-soft",
   UNKNOWN: "bg-mist-deep text-ink-mute",

@@ -21,8 +21,12 @@ class Settings(BaseSettings):
     failure_threshold: int = 3
     recovery_threshold: int = 2
     slow_threshold_ms: int = 2000
-    check_retention_days: int = 7
-    failed_email_retention_days: int = 10
+    check_retention_days: int = 1
+    check_retention_per_site: int = 24
+    notification_retention: int = 50
+    failed_email_retention_days: int = 3
+    # Wait this long after the latest down/recovery before sending one group email
+    digest_debounce_seconds: int = 90
 
     smtp_host: str = ""
     smtp_port: int = 587

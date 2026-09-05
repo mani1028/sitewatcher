@@ -12,10 +12,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { BackLink } from "@/components/BackLink";
 import { Protected } from "@/components/Protected";
 import { StatusDot } from "@/components/StatusDot";
 import { api, Check, Incident, Website } from "@/lib/api";
-import { formatDuration, formatMs, formatTime, intervalLabel, statusLabel } from "@/lib/format";
+import { formatDuration, formatMs, formatTime, intervalLabel, statusLabel, displayStatus } from "@/lib/format";
+import { categoryLabel, ownerBadgeClass, ownerLabel } from "@/lib/categories";
 
 export default function WebsiteDetailPage() {
   const params = useParams();
@@ -81,24 +83,44 @@ export default function WebsiteDetailPage() {
       {!site ? (
         <p className="text-ink-mute">{error || "Loading…"}</p>
       ) : (
-        <div className="space-y-8 animate-rise">
+        <div className="animate-rise space-y-6 sm:space-y-8">
           <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <Link href="/dashboard" className="text-xs uppercase tracking-wide text-ink-mute hover:text-teal">
-                ← Dashboard
-              </Link>
-              <div className="mt-2 flex items-center gap-3">
-                <StatusDot status={site.status} pulse={site.status === "DOWN"} className="h-3 w-3" />
-                <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">{site.name}</h1>
+            <div className="min-w-0 space-y-3">
+              <BackLink href="/dashboard" label="Back to dashboard" />
+              <div className="flex flex-wrap items-center gap-3">
+                <StatusDot
+                  status={displayStatus(site)}
+                  pulse={displayStatus(site) === "DOWN" || displayStatus(site) === "FAILING"}
+                  className="h-3 w-3"
+                />
+                <h1 className="font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+                  {site.name}
+                </h1>
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${ownerBadgeClass(site.owner)}`}
+                >
+                  {ownerLabel(site.owner)}
+                </span>
+                <span className="rounded-full bg-mist-deep px-2.5 py-0.5 text-[11px] font-medium text-ink-soft">
+                  {categoryLabel(site.category)}
+                </span>
               </div>
-              <p className="mt-1 font-mono text-sm text-ink-mute">{site.url}</p>
-              <p className="mt-3 text-sm text-ink-soft">
-                {statusLabel(site.status)} · {site.uptime_percent.toFixed(2)}% uptime · checked every{" "}
-                {intervalLabel(site.check_interval)}
+              <p className="font-mono text-sm text-ink-mute">{site.url}</p>
+              {site.health_url ? (
+                <p className="font-mono text-xs text-ink-mute">
+                  Health: {site.health_url}
+                </p>
+              ) : null}
+              <p className="text-sm text-ink-soft">
+                {statusLabel(displayStatus(site))}
+                {displayStatus(site) === "RECOVERING" && site.consecutive_successes
+                  ? ` (${site.consecutive_successes} ok)`
+                  : ""}{" "}
+                · {site.uptime_percent.toFixed(2)}% uptime · checked every {intervalLabel(site.check_interval)}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Link href={`/websites/${site.id}/edit`} className="btn-primary">
+              <Link href={`/websites/${site.id}/edit`} className="btn-primary h-10 px-4">
                 Edit
               </Link>
               <button className="btn-secondary" onClick={toggleMaintenance} disabled={saving}>
@@ -113,7 +135,16 @@ export default function WebsiteDetailPage() {
           {error && <p className="text-sm text-alert-down">{error}</p>}
 
           <section className="grid gap-4 sm:grid-cols-3">
-            <Metric label="Response" value={site.status === "DOWN" ? "DOWN" : formatMs(site.last_response_time)} />
+            <Metric
+              label="Response"
+              value={
+                displayStatus(site) === "DOWN"
+                  ? "DOWN"
+                  : displayStatus(site) === "RECOVERING"
+                    ? formatMs(site.last_response_time)
+                    : formatMs(site.last_response_time)
+              }
+            />
             <Metric label="Last status" value={site.last_status_code ? String(site.last_status_code) : "—"} />
             <Metric
               label="SSL expires"

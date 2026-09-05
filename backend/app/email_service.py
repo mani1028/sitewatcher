@@ -117,25 +117,201 @@ def _wrap_html(*, title: str, status: str, status_color: str, name: str, url: st
 </html>"""
 
 
-def build_down_email(*, name: str, url: str, reason: str, detected_at: str, website_id: int | None = None) -> tuple[str, str, str]:
-    subject = f"[DOWN] {name}"
-    text = (
-        f"DOWN — {name}\n"
-        f"{url}\n\n"
-        f"Reason: {reason}\n"
-        f"Detected: {detected_at}\n\n"
-        f"Open: {_dashboard_url(website_id)}\n"
+def _short_cell(value: str, limit: int = 80) -> str:
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def _data_table(
+    headers: list[str],
+    rows: list[list[str]],
+    *,
+    accent: str | None = None,
+) -> str:
+    """Compact HTML data table for digest / report emails."""
+    if not rows:
+        return ""
+    head = "".join(
+        f'<th style="padding:8px 10px;text-align:left;font-size:11px;font-weight:600;'
+        f'letter-spacing:0.04em;text-transform:uppercase;color:#6b7280;'
+        f'border-bottom:1px solid #e5e7eb;background:#f9fafb;">{html.escape(h)}</th>'
+        for h in headers
     )
-    html_body = _wrap_html(
-        title="SiteWatch alert",
-        status="DOWN",
-        status_color="#dc2626",
-        name=name,
-        url=url,
-        rows=[("Reason", reason), ("Detected", detected_at)],
-        footer_link=_dashboard_url(website_id),
+    body_rows = []
+    for i, cells in enumerate(rows):
+        bg = "#ffffff" if i % 2 == 0 else "#fafafa"
+        tds = []
+        for j, cell in enumerate(cells):
+            # First column often holds status badge HTML already escaped by caller via safe flag
+            if j == 0 and cell.startswith("<"):
+                tds.append(
+                    f'<td style="padding:9px 10px;vertical-align:top;border-bottom:1px solid #f3f4f6;">{cell}</td>'
+                )
+            else:
+                tds.append(
+                    f'<td style="padding:9px 10px;vertical-align:top;border-bottom:1px solid #f3f4f6;'
+                    f'font-size:13px;color:#111827;line-height:1.35;">{cell}</td>'
+                )
+        body_rows.append(f'<tr style="background:{bg};">{"".join(tds)}</tr>')
+    bar = (
+        f'<div style="height:3px;background:{accent};border-radius:2px 2px 0 0;"></div>'
+        if accent
+        else ""
     )
+    return f"""
+    {bar}
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+           style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <thead><tr>{head}</tr></thead>
+      <tbody>{"".join(body_rows)}</tbody>
+    </table>
+    """
+
+
+def _status_pill(label: str, color: str) -> str:
+    return (
+        f'<span style="display:inline-block;padding:3px 8px;border-radius:999px;'
+        f'background:{color};color:#ffffff;font-size:11px;font-weight:600;'
+        f'white-space:nowrap;">{html.escape(label)}</span>'
+    )
+
+
+def _site_cell(name: str, url: str) -> str:
+    return (
+        f'<div style="font-weight:600;color:#111827;font-size:13px;">{html.escape(name)}</div>'
+        f'<a href="{html.escape(url)}" style="color:#2563eb;font-size:11px;word-break:break-all;'
+        f'text-decoration:none;">{html.escape(url.replace("https://", "").replace("http://", ""))}</a>'
+    )
+
+
+def build_digest_email(
+    *,
+    downs: list[dict[str, str]],
+    recoveries: list[dict[str, str]],
+    still_down: list[dict[str, str]] | None = None,
+) -> tuple[str, str, str]:
+    """One email covering all newly down / recovered projects in a check cycle."""
+    still_down = still_down or []
+    parts: list[str] = []
+    if downs:
+        parts.append(f"{len(downs)} down")
+    if recoveries:
+        parts.append(f"{len(recoveries)} recovered")
+    subject = "SiteWatch: " + (", ".join(parts) if parts else "status update")
+
+    text_lines = ["SiteWatch status update", ""]
+    if downs:
+        text_lines.append(f"DOWN ({len(downs)})")
+        for item in downs:
+            text_lines.append(f"- {item['name']} — {item['url']}")
+            text_lines.append(f"  Reason: {item.get('reason') or 'unreachable'}")
+            if item.get("detected_at"):
+                text_lines.append(f"  Detected: {item['detected_at']}")
+        text_lines.append("")
+    if recoveries:
+        text_lines.append(f"RECOVERED ({len(recoveries)})")
+        for item in recoveries:
+            text_lines.append(f"- {item['name']} — {item['url']}")
+            if item.get("downtime"):
+                text_lines.append(f"  Downtime: {item['downtime']}")
+            if item.get("recovered_at"):
+                text_lines.append(f"  Recovered: {item['recovered_at']}")
+        text_lines.append("")
+    other_still = [s for s in still_down if s.get("name") not in {d["name"] for d in downs}]
+    if other_still:
+        text_lines.append(f"STILL DOWN ({len(other_still)})")
+        for item in other_still:
+            text_lines.append(f"- {item['name']} — {item['url']}")
+            if item.get("reason"):
+                text_lines.append(f"  Reason: {item['reason']}")
+        text_lines.append("")
+    text_lines.append(f"Dashboard: {_dashboard_url()}")
+    text = "\n".join(text_lines)
+
+    sections: list[str] = []
+
+    if downs:
+        rows = [
+            [
+                _status_pill("Down", "#dc2626"),
+                _site_cell(item["name"], item["url"]),
+                html.escape(_short_cell(item.get("reason") or "unreachable", 90)),
+                html.escape(item.get("detected_at") or "—"),
+            ]
+            for item in downs
+        ]
+        sections.append(
+            f"""
+            <tr><td style="padding:8px 24px 4px;font-size:12px;font-weight:600;color:#dc2626;">Down · {len(downs)}</td></tr>
+            <tr><td style="padding:0 24px 16px;">{_data_table(["Status", "Site", "Reason", "Detected"], rows, accent="#dc2626")}</td></tr>
+            """
+        )
+
+    if recoveries:
+        rows = [
+            [
+                _status_pill("Up", "#16a34a"),
+                _site_cell(item["name"], item["url"]),
+                html.escape(item.get("downtime") or "—"),
+                html.escape(item.get("recovered_at") or "—"),
+            ]
+            for item in recoveries
+        ]
+        sections.append(
+            f"""
+            <tr><td style="padding:8px 24px 4px;font-size:12px;font-weight:600;color:#16a34a;">Recovered · {len(recoveries)}</td></tr>
+            <tr><td style="padding:0 24px 16px;">{_data_table(["Status", "Site", "Downtime", "Recovered"], rows, accent="#16a34a")}</td></tr>
+            """
+        )
+
+    if other_still:
+        rows = [
+            [
+                _status_pill("Still down", "#b45309"),
+                _site_cell(item["name"], item["url"]),
+                html.escape(_short_cell(item.get("reason") or "—", 90)),
+            ]
+            for item in other_still
+        ]
+        sections.append(
+            f"""
+            <tr><td style="padding:8px 24px 4px;font-size:12px;font-weight:600;color:#b45309;">Still down · {len(other_still)}</td></tr>
+            <tr><td style="padding:0 24px 16px;">{_data_table(["Status", "Site", "Reason"], rows, accent="#b45309")}</td></tr>
+            """
+        )
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:24px;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr>
+      <td style="padding:18px 24px 4px;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;color:#6b7280;">SiteWatch</td>
+    </tr>
+    <tr>
+      <td style="padding:2px 24px 6px;font-size:20px;font-weight:650;color:#111827;">Status update</td>
+    </tr>
+    <tr>
+      <td style="padding:0 24px 14px;font-size:13px;color:#6b7280;">{html.escape(format_ist())}</td>
+    </tr>
+    {"".join(sections)}
+    <tr>
+      <td style="padding:12px 24px 22px;border-top:1px solid #f3f4f6;">
+        <a href="{html.escape(_dashboard_url())}" style="display:inline-block;padding:10px 14px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-size:13px;font-weight:600;">Open SiteWatch</a>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
     return subject, text, html_body
+
+
+def build_down_email(*, name: str, url: str, reason: str, detected_at: str, website_id: int | None = None) -> tuple[str, str, str]:
+    return build_digest_email(
+        downs=[{"name": name, "url": url, "reason": reason, "detected_at": detected_at}],
+        recoveries=[],
+    )
 
 
 def build_recovery_email(
@@ -146,24 +322,10 @@ def build_recovery_email(
     recovered_at: str,
     website_id: int | None = None,
 ) -> tuple[str, str, str]:
-    subject = f"[UP] {name}"
-    text = (
-        f"UP — {name}\n"
-        f"{url}\n\n"
-        f"Downtime: {downtime}\n"
-        f"Recovered: {recovered_at}\n\n"
-        f"Open: {_dashboard_url(website_id)}\n"
+    return build_digest_email(
+        downs=[],
+        recoveries=[{"name": name, "url": url, "downtime": downtime, "recovered_at": recovered_at}],
     )
-    html_body = _wrap_html(
-        title="SiteWatch recovery",
-        status="UP",
-        status_color="#16a34a",
-        name=name,
-        url=url,
-        rows=[("Downtime", downtime), ("Recovered", recovered_at)],
-        footer_link=_dashboard_url(website_id),
-    )
-    return subject, text, html_body
 
 
 def build_test_email() -> tuple[str, str, str]:
@@ -181,6 +343,98 @@ def build_test_email() -> tuple[str, str, str]:
     <tr><td style="padding:4px 24px 8px;font-size:22px;font-weight:650;color:#111827;">Email is working</td></tr>
     <tr><td style="padding:0 24px 20px;color:#4b5563;font-size:14px;line-height:1.5;">Your SMTP settings are configured correctly. Downtime alerts will look like this and include the site URL.</td></tr>
     <tr><td style="padding:0 24px 24px;"><a href="{html.escape(dash)}" style="display:inline-block;padding:10px 14px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-size:13px;font-weight:600;">Open SiteWatch</a></td></tr>
+  </table>
+</body>
+</html>"""
+    return subject, text, html_body
+
+
+def build_client_report_email(
+    *,
+    slot_label: str,
+    checked_at: str,
+    down: list[dict[str, str]],
+    up: list[dict[str, str]],
+    unknown: list[dict[str, str]] | None = None,
+) -> tuple[str, str, str]:
+    """Morning / evening client-site status report — neat status table."""
+    unknown = unknown or []
+    total = len(down) + len(up) + len(unknown)
+    subject = f"Client sites · {slot_label} — {len(down)} down / {len(up)} up"
+
+    text_lines = [
+        f"SiteWatch client report ({slot_label})",
+        f"Checked: {checked_at}",
+        f"Total: {total} · Up: {len(up)} · Down: {len(down)} · Unknown: {len(unknown)}",
+        "",
+    ]
+    if down:
+        text_lines.append(f"DOWN ({len(down)})")
+        for item in down:
+            text_lines.append(f"- {item['name']} — {item['url']}")
+            if item.get("reason"):
+                text_lines.append(f"  {item['reason']}")
+        text_lines.append("")
+    if unknown:
+        text_lines.append(f"UNKNOWN ({len(unknown)})")
+        for item in unknown:
+            text_lines.append(f"- {item['name']} — {item['url']}")
+        text_lines.append("")
+    text_lines.append(f"UP ({len(up)})")
+    for item in up:
+        text_lines.append(f"- {item['name']}")
+    text_lines.append("")
+    text_lines.append(f"Dashboard: {_dashboard_url()}")
+    text = "\n".join(text_lines)
+
+    table_rows: list[list[str]] = []
+    for item in down:
+        table_rows.append(
+            [
+                _status_pill("Down", "#dc2626"),
+                _site_cell(item["name"], item["url"]),
+                html.escape(_short_cell(item.get("reason") or "—", 100)),
+            ]
+        )
+    for item in unknown:
+        table_rows.append(
+            [
+                _status_pill("Unknown", "#6b7280"),
+                _site_cell(item["name"], item["url"]),
+                "—",
+            ]
+        )
+    for item in up:
+        table_rows.append(
+            [
+                _status_pill("Up", "#16a34a"),
+                _site_cell(item["name"], item["url"]),
+                "—",
+            ]
+        )
+
+    table_html = _data_table(["Status", "Site", "Note"], table_rows)
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:24px;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:10px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr><td style="padding:18px 24px 4px;font-size:12px;letter-spacing:0.06em;text-transform:uppercase;color:#6b7280;">SiteWatch · Clients</td></tr>
+    <tr><td style="padding:2px 24px 4px;font-size:20px;font-weight:650;color:#111827;">{html.escape(slot_label)} report</td></tr>
+    <tr>
+      <td style="padding:0 24px 16px;color:#6b7280;font-size:13px;">
+        {html.escape(checked_at)} · {total} sites ·
+        <span style="color:#16a34a;font-weight:600;">{len(up)} up</span> ·
+        <span style="color:#dc2626;font-weight:600;">{len(down)} down</span>
+        {f' · <span style="color:#6b7280;font-weight:600;">{len(unknown)} unknown</span>' if unknown else ''}
+      </td>
+    </tr>
+    <tr><td style="padding:0 24px 18px;">{table_html}</td></tr>
+    <tr>
+      <td style="padding:12px 24px 22px;border-top:1px solid #f3f4f6;">
+        <a href="{html.escape(_dashboard_url())}" style="display:inline-block;padding:10px 14px;background:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-size:13px;font-weight:600;">Open SiteWatch</a>
+      </td>
+    </tr>
   </table>
 </body>
 </html>"""

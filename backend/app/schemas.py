@@ -19,7 +19,10 @@ class LoginRequest(BaseModel):
 class WebsiteCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     url: str = Field(min_length=5, max_length=500)
-    check_interval: Literal[60, 300, 600, 3600] = 60
+    health_url: str | None = Field(default=None, max_length=500)
+    category: Literal["portal", "website", "microservice", "other"] = "website"
+    owner: Literal["inhouse", "client"] = "inhouse"
+    check_interval: Literal[60, 300, 600, 3600, 86400] = 60
     timeout: int = Field(default=10, ge=3, le=60)
     expected_status: int = Field(default=200, ge=100, le=599)
     monitor_ssl: bool = True
@@ -28,8 +31,11 @@ class WebsiteCreate(BaseModel):
 class WebsiteUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     url: str | None = Field(default=None, min_length=5, max_length=500)
+    health_url: str | None = Field(default=None, max_length=500)
+    category: Literal["portal", "website", "microservice", "other"] | None = None
+    owner: Literal["inhouse", "client"] | None = None
     enabled: bool | None = None
-    check_interval: Literal[60, 300, 600, 3600] | None = None
+    check_interval: Literal[60, 300, 600, 3600, 86400] | None = None
     timeout: int | None = Field(default=None, ge=3, le=60)
     expected_status: int | None = Field(default=None, ge=100, le=599)
     monitor_ssl: bool | None = None
@@ -40,6 +46,9 @@ class WebsiteOut(BaseModel):
     id: int
     name: str
     url: str
+    health_url: str | None = None
+    category: str = "website"
+    owner: str = "inhouse"
     enabled: bool
     check_interval: int
     timeout: int

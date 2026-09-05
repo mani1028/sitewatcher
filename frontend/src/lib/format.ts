@@ -4,6 +4,24 @@ export function formatMs(ms: number | null | undefined) {
   return `${Math.round(ms)}ms`;
 }
 
+/** Short human-readable error for dense lists (full text via title tooltip). */
+export function shortError(message: string | null | undefined): string {
+  if (!message) return "";
+  const m = message.toLowerCase();
+  if (m.includes("name or service not known") || m.includes("nodename nor servname")) return "DNS not found";
+  if (m.includes("certificate") || m.includes("ssl") || m.includes("tls")) return "SSL/TLS error";
+  if (m.includes("timed out") || m.includes("timeout")) return "Timed out";
+  if (m.includes("connection refused")) return "Connection refused";
+  if (m.includes("connection reset")) return "Connection reset";
+  if (m.includes("unreachable")) return "Unreachable";
+  if (m.includes("401") || m.includes("unauthorized")) return "Unauthorized";
+  if (m.includes("403") || m.includes("forbidden")) return "Forbidden";
+  if (m.includes("404")) return "Not found (404)";
+  if (m.includes("500") || m.includes("502") || m.includes("503") || m.includes("504")) return "Server error";
+  const clean = message.replace(/^\[.*?\]\s*/, "").trim();
+  return clean.length > 42 ? `${clean.slice(0, 40)}…` : clean;
+}
+
 export function formatDuration(seconds: number | null | undefined) {
   if (seconds == null) return "—";
   const mins = Math.floor(seconds / 60);
@@ -28,13 +46,17 @@ export function formatTime(iso: string | null | undefined) {
 export type SiteLike = {
   status: string;
   consecutive_failures?: number;
+  consecutive_successes?: number;
   maintenance_mode?: boolean;
 };
 
-/** Visual status used in the UI (includes FAILING before confirmed DOWN). */
+/** Visual status used in the UI (includes FAILING / RECOVERING). */
 export function displayStatus(site: SiteLike): string {
   if (site.maintenance_mode || site.status === "MAINTENANCE") return "MAINTENANCE";
-  if (site.status === "DOWN") return "DOWN";
+  if (site.status === "DOWN") {
+    if ((site.consecutive_successes || 0) > 0) return "RECOVERING";
+    return "DOWN";
+  }
   if ((site.consecutive_failures || 0) > 0) return "FAILING";
   return site.status;
 }
@@ -47,6 +69,8 @@ export function statusLabel(status: string) {
       return "Down";
     case "FAILING":
       return "Failing";
+    case "RECOVERING":
+      return "Recovering";
     case "SLOW":
       return "Slow";
     case "MAINTENANCE":
@@ -62,16 +86,18 @@ export function statusRank(status: string): number {
       return 0;
     case "FAILING":
       return 1;
-    case "SLOW":
+    case "RECOVERING":
       return 2;
-    case "UNKNOWN":
+    case "SLOW":
       return 3;
-    case "MAINTENANCE":
+    case "UNKNOWN":
       return 4;
-    case "UP":
+    case "MAINTENANCE":
       return 5;
-    default:
+    case "UP":
       return 6;
+    default:
+      return 7;
   }
 }
 
@@ -80,5 +106,6 @@ export function intervalLabel(seconds: number) {
   if (seconds === 300) return "5 minutes";
   if (seconds === 600) return "10 minutes";
   if (seconds === 3600) return "1 hour";
+  if (seconds === 86400) return "1 day";
   return `${seconds}s`;
 }

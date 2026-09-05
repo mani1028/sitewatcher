@@ -1,9 +1,15 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+export type SiteCategory = "portal" | "website" | "microservice" | "other";
+export type SiteOwner = "inhouse" | "client";
+
 export type Website = {
   id: number;
   name: string;
   url: string;
+  health_url?: string | null;
+  category: SiteCategory;
+  owner: SiteOwner;
   enabled: boolean;
   check_interval: number;
   timeout: number;

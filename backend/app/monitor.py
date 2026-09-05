@@ -7,12 +7,18 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.database import SessionLocal
-from app.email_service import build_down_email, build_recovery_email, format_duration, format_ist, send_email
+from app.email_service import (
+    build_client_report_email,
+    build_digest_email,
+    format_duration,
+    format_ist,
+    send_email,
+)
 from app.models import (
     Check,
     CheckStatus,
@@ -20,6 +26,7 @@ from app.models import (
     IncidentStatus,
     NotificationLog,
     SettingsRow,
+    SiteOwner,
     SiteStatus,
     Website,
 )
@@ -38,10 +45,17 @@ class ProbeResult:
     error_message: str | None = None
 
 
-async def probe_website(website: Website) -> ProbeResult:
+async def _probe_url(
+    url: str,
+    *,
+    timeout_sec: int,
+    expected_status: int,
+    follow_redirects: bool = True,
+    label: str = "URL",
+) -> ProbeResult:
     timeout = httpx.Timeout(
-        connect=min(3.0, website.timeout),
-        read=max(1.0, website.timeout - 3),
+        connect=min(3.0, timeout_sec),
+        read=max(1.0, timeout_sec - 3),
         write=3.0,
         pool=3.0,
     )
@@ -49,28 +63,77 @@ async def probe_website(website: Website) -> ProbeResult:
     try:
         async with httpx.AsyncClient(
             timeout=timeout,
-            follow_redirects=True,
+            follow_redirects=follow_redirects,
             verify=True,
-            headers={"User-Agent": "SiteWatch/1.0"},
+            headers={"User-Agent": "SiteWatch/1.0", "Accept": "application/json, text/html, */*"},
         ) as client:
-            response = await client.get(website.url)
+            response = await client.get(url)
             elapsed_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
-            ok = response.status_code == website.expected_status
+            ok = response.status_code == expected_status
             return ProbeResult(
                 ok=ok,
                 status_code=response.status_code,
                 response_time_ms=round(elapsed_ms, 2),
                 error_type=None if ok else "unexpected_status",
-                error_message=None if ok else f"Expected {website.expected_status}, got {response.status_code}",
+                error_message=None if ok else f"{label}: expected {expected_status}, got {response.status_code}",
             )
     except httpx.TimeoutException:
         elapsed_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
-        return ProbeResult(False, None, round(elapsed_ms, 2), "timeout", "Connection timeout")
+        return ProbeResult(False, None, round(elapsed_ms, 2), "timeout", f"{label}: connection timeout")
     except httpx.ConnectError as exc:
-        return ProbeResult(False, None, None, "connection", str(exc)[:400])
+        return ProbeResult(False, None, None, "connection", f"{label}: {str(exc)[:380]}")
     except Exception as exc:  # noqa: BLE001
-        return ProbeResult(False, None, None, "error", str(exc)[:400])
+        return ProbeResult(False, None, None, "error", f"{label}: {str(exc)[:380]}")
 
+
+async def probe_website(website: Website) -> ProbeResult:
+    """Probe primary URL and optional health/API URL. Both must succeed."""
+    primary = await _probe_url(
+        website.url,
+        timeout_sec=website.timeout,
+        expected_status=website.expected_status,
+        follow_redirects=True,
+        label="Frontend",
+    )
+    health = (website.health_url or "").strip()
+    if not health:
+        # Keep legacy wording when there is no secondary check
+        if primary.error_message and primary.error_message.startswith("Frontend: "):
+            primary.error_message = primary.error_message.removeprefix("Frontend: ")
+        return primary
+
+    secondary = await _probe_url(
+        health,
+        timeout_sec=website.timeout,
+        expected_status=website.expected_status,
+        # Don't treat a login-page redirect as a healthy API
+        follow_redirects=False,
+        label="Backend/API",
+    )
+
+    times = [t for t in (primary.response_time_ms, secondary.response_time_ms) if t is not None]
+    combined_ms = round(max(times), 2) if times else None
+
+    if primary.ok and secondary.ok:
+        return ProbeResult(
+            ok=True,
+            status_code=secondary.status_code or primary.status_code,
+            response_time_ms=combined_ms,
+        )
+
+    parts: list[str] = []
+    if not primary.ok:
+        parts.append(primary.error_message or "Frontend down")
+    if not secondary.ok:
+        parts.append(secondary.error_message or "Backend/API down")
+    failed = secondary if not secondary.ok else primary
+    return ProbeResult(
+        ok=False,
+        status_code=failed.status_code,
+        response_time_ms=combined_ms,
+        error_type=failed.error_type or "error",
+        error_message="; ".join(parts)[:500],
+    )
 
 def check_ssl_expiry(url: str) -> datetime | None:
     parsed = urlparse(url)
@@ -95,9 +158,14 @@ def check_ssl_expiry(url: str) -> datetime | None:
 
 
 async def rolling_avg_response(db: AsyncSession, website_id: int, limit: int = 5) -> float | None:
+    """Average recent successful response times only (ignore timeouts/errors)."""
     result = await db.execute(
         select(Check.response_time)
-        .where(Check.website_id == website_id, Check.response_time.is_not(None))
+        .where(
+            Check.website_id == website_id,
+            Check.response_time.is_not(None),
+            Check.status.in_([CheckStatus.UP, CheckStatus.SLOW]),
+        )
         .order_by(Check.checked_at.desc())
         .limit(limit)
     )
@@ -179,25 +247,7 @@ async def process_website(db: AsyncSession, website: Website, settings_row: Sett
                 open_incident.status = IncidentStatus.RESOLVED
                 open_incident.resolved_at = now
                 open_incident.duration_seconds = int((now - open_incident.started_at).total_seconds())
-                if not open_incident.recovery_notification_sent:
-                    subject, body, html_body = build_recovery_email(
-                        name=website.name,
-                        url=website.url,
-                        downtime=format_duration(open_incident.duration_seconds),
-                        recovered_at=format_ist(now),
-                        website_id=website.id,
-                    )
-                    await send_email(
-                        db,
-                        settings_row,
-                        subject=subject,
-                        body=body,
-                        html_body=html_body,
-                        website_id=website.id,
-                        incident_id=open_incident.id,
-                        kind="recovery",
-                    )
-                    open_incident.recovery_notification_sent = True
+                # Email is batched after the check cycle (see flush_alert_digest)
 
             website.status = SiteStatus.SLOW if check_status == CheckStatus.SLOW else SiteStatus.UP
         elif website.status != SiteStatus.DOWN:
@@ -224,28 +274,140 @@ async def process_website(db: AsyncSession, website: Website, settings_row: Sett
                         status=IncidentStatus.OPEN,
                     )
                     db.add(incident)
-                    await db.flush()
-                    subject, body, html_body = build_down_email(
-                        name=website.name,
-                        url=website.url,
-                        reason=reason,
-                        detected_at=format_ist(now),
-                        website_id=website.id,
-                    )
-                    await send_email(
-                        db,
-                        settings_row,
-                        subject=subject,
-                        body=body,
-                        html_body=html_body,
-                        website_id=website.id,
-                        incident_id=incident.id,
-                        kind="down",
-                    )
-                    incident.notification_sent = True
+                    # Email is batched after the check cycle (see flush_alert_digest)
 
     website.uptime_percent = await recompute_uptime(db, website.id)
     await db.commit()
+
+
+async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> None:
+    """Send one group email for all newly down / recovered projects (never one mail per site)."""
+    pending_downs = list(
+        (
+            await db.execute(
+                select(Incident)
+                .where(Incident.status == IncidentStatus.OPEN, Incident.notification_sent.is_(False))
+                .order_by(Incident.started_at.desc())
+            )
+        ).scalars().all()
+    )
+    pending_recoveries = list(
+        (
+            await db.execute(
+                select(Incident)
+                .where(
+                    Incident.status == IncidentStatus.RESOLVED,
+                    Incident.recovery_notification_sent.is_(False),
+                )
+                .order_by(Incident.resolved_at.desc())
+            )
+        ).scalars().all()
+    )
+    if not pending_downs and not pending_recoveries:
+        return
+
+    # Debounce: hold briefly so sites that fail/recover in the same wave share one email
+    now = datetime.now(timezone.utc)
+    event_times: list[datetime] = []
+    for incident in pending_downs:
+        if incident.started_at:
+            event_times.append(incident.started_at)
+    for incident in pending_recoveries:
+        if incident.resolved_at:
+            event_times.append(incident.resolved_at)
+    if event_times:
+        newest = max(event_times)
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=timezone.utc)
+        age = (now - newest).total_seconds()
+        debounce = max(0, settings.digest_debounce_seconds)
+        if age < debounce:
+            logger.info(
+                "Digest debounce: %s pending event(s), newest %.0fs ago (wait %ss)",
+                len(pending_downs) + len(pending_recoveries),
+                age,
+                debounce,
+            )
+            return
+
+    website_ids = {i.website_id for i in pending_downs} | {i.website_id for i in pending_recoveries}
+    open_all = list(
+        (
+            await db.execute(
+                select(Incident).where(Incident.status == IncidentStatus.OPEN).order_by(Incident.started_at.desc())
+            )
+        ).scalars().all()
+    )
+    website_ids |= {i.website_id for i in open_all}
+    sites: dict[int, Website] = {}
+    if website_ids:
+        sites = {
+            w.id: w
+            for w in (await db.execute(select(Website).where(Website.id.in_(website_ids)))).scalars().all()
+        }
+
+    downs = []
+    for incident in pending_downs:
+        site = sites.get(incident.website_id)
+        if not site:
+            continue
+        downs.append(
+            {
+                "name": site.name,
+                "url": site.url,
+                "reason": incident.reason,
+                "detected_at": format_ist(incident.started_at),
+            }
+        )
+
+    recoveries = []
+    for incident in pending_recoveries:
+        site = sites.get(incident.website_id)
+        if not site:
+            continue
+        recoveries.append(
+            {
+                "name": site.name,
+                "url": site.url,
+                "downtime": format_duration(incident.duration_seconds),
+                "recovered_at": format_ist(incident.resolved_at),
+            }
+        )
+
+    still_down = []
+    for incident in open_all:
+        site = sites.get(incident.website_id)
+        if not site:
+            continue
+        still_down.append({"name": site.name, "url": site.url, "reason": incident.reason})
+
+    subject, body, html_body = build_digest_email(
+        downs=downs,
+        recoveries=recoveries,
+        still_down=still_down,
+    )
+    ok = await send_email(
+        db,
+        settings_row,
+        subject=subject,
+        body=body,
+        html_body=html_body,
+        kind="digest",
+    )
+    if not ok:
+        return
+
+    for incident in pending_downs:
+        incident.notification_sent = True
+    for incident in pending_recoveries:
+        incident.recovery_notification_sent = True
+    await db.commit()
+    logger.info(
+        "Sent group digest: %s down, %s recovered (subject=%s)",
+        len(downs),
+        len(recoveries),
+        subject,
+    )
 
 
 async def run_due_checks() -> None:
@@ -265,25 +427,32 @@ async def run_due_checks() -> None:
             .limit(100)
         )
         websites = list(result.scalars().all())
-        if not websites:
-            return
 
-        semaphore = asyncio.Semaphore(settings.max_concurrent_checks)
+        if websites:
+            semaphore = asyncio.Semaphore(settings.max_concurrent_checks)
 
-        async def _run(site_id: int) -> None:
-            async with semaphore:
-                async with SessionLocal() as session:
-                    site = await session.get(Website, site_id)
-                    row = await session.scalar(select(SettingsRow).where(SettingsRow.id == 1))
-                    if not site or not row or not site.enabled:
-                        return
-                    try:
-                        await process_website(session, site, row)
-                    except Exception:
-                        logger.exception("Check failed for website %s", site_id)
+            async def _run(site_id: int) -> None:
+                async with semaphore:
+                    async with SessionLocal() as session:
+                        site = await session.get(Website, site_id)
+                        row = await session.scalar(select(SettingsRow).where(SettingsRow.id == 1))
+                        if not site or not row or not site.enabled:
+                            return
+                        try:
+                            await process_website(session, site, row)
+                        except Exception:
+                            logger.exception("Check failed for website %s", site_id)
 
-        await asyncio.gather(*[_run(w.id) for w in websites])
+            await asyncio.gather(*[_run(w.id) for w in websites])
 
+        # Always attempt group digest (debounce may hold briefly to batch more sites)
+        async with SessionLocal() as session:
+            row = await session.scalar(select(SettingsRow).where(SettingsRow.id == 1))
+            if row:
+                try:
+                    await flush_alert_digest(session, row)
+                except Exception:
+                    logger.exception("Failed to send alert digest")
 
 async def run_ssl_checks() -> None:
     async with SessionLocal() as db:
@@ -305,21 +474,149 @@ async def run_ssl_checks() -> None:
 
 
 async def cleanup_old_checks() -> None:
+    """Drop old per-request check rows and trim notification logs to keep the DB light."""
     async with SessionLocal() as db:
         cutoff = datetime.now(timezone.utc) - timedelta(days=settings.check_retention_days)
-        await db.execute(delete(Check).where(Check.checked_at < cutoff))
+        by_age = await db.execute(delete(Check).where(Check.checked_at < cutoff))
+
+        # Keep only the newest N checks per website (charts still work; history stays small)
+        per_site = max(5, settings.check_retention_per_site)
+        by_cap = await db.execute(
+            text(
+                """
+                DELETE FROM checks
+                WHERE id IN (
+                  SELECT id FROM (
+                    SELECT id,
+                           ROW_NUMBER() OVER (
+                             PARTITION BY website_id ORDER BY checked_at DESC
+                           ) AS rn
+                    FROM checks
+                  ) ranked
+                  WHERE rn > :keep
+                )
+                """
+            ),
+            {"keep": per_site},
+        )
 
         failed_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.failed_email_retention_days)
-        result = await db.execute(
+        failed = await db.execute(
             delete(NotificationLog).where(
                 NotificationLog.success.is_(False),
                 NotificationLog.created_at < failed_cutoff,
             )
         )
+
+        keep_notes = max(10, settings.notification_retention)
+        notes = await db.execute(
+            text(
+                """
+                DELETE FROM notifications
+                WHERE id NOT IN (
+                  SELECT id FROM (
+                    SELECT id FROM notifications ORDER BY created_at DESC LIMIT :keep
+                  ) newest
+                )
+                """
+            ),
+            {"keep": keep_notes},
+        )
+
         await db.commit()
         logger.info(
-            "Cleaned checks older than %s days; removed %s failed emails older than %s days",
+            "Log cleanup: checks age=%s cap=%s; notifications failed=%s trim=%s (keep %s/site, %s days)",
+            by_age.rowcount or 0,
+            by_cap.rowcount or 0,
+            failed.rowcount or 0,
+            notes.rowcount or 0,
+            per_site,
             settings.check_retention_days,
-            result.rowcount or 0,
-            settings.failed_email_retention_days,
+        )
+
+
+async def send_client_status_report(slot: str = "morning") -> None:
+    """Recheck all enabled client sites, then email a morning/evening summary."""
+    slot_label = "Morning" if slot == "morning" else "Evening"
+    async with SessionLocal() as db:
+        settings_row = await db.scalar(select(SettingsRow).where(SettingsRow.id == 1))
+        if not settings_row:
+            return
+
+        result = await db.execute(
+            select(Website)
+            .where(Website.enabled.is_(True), Website.owner == SiteOwner.CLIENT.value)
+            .order_by(Website.name)
+        )
+        clients = list(result.scalars().all())
+        if not clients:
+            logger.info("Client %s report skipped — no client sites", slot_label)
+            return
+
+        ids = [w.id for w in clients]
+
+    semaphore = asyncio.Semaphore(settings.max_concurrent_checks)
+
+    async def _check(site_id: int) -> None:
+        async with semaphore:
+            async with SessionLocal() as session:
+                site = await session.get(Website, site_id)
+                row = await session.scalar(select(SettingsRow).where(SettingsRow.id == 1))
+                if not site or not row or not site.enabled:
+                    return
+                try:
+                    await process_website(session, site, row)
+                except Exception:
+                    logger.exception("Client report check failed for %s", site_id)
+
+    await asyncio.gather(*[_check(i) for i in ids])
+
+    async with SessionLocal() as db:
+        settings_row = await db.scalar(select(SettingsRow).where(SettingsRow.id == 1))
+        if not settings_row:
+            return
+        sites = list(
+            (
+                await db.execute(
+                    select(Website)
+                    .where(Website.id.in_(ids))
+                    .order_by(Website.name)
+                )
+            ).scalars().all()
+        )
+        down: list[dict[str, str]] = []
+        up: list[dict[str, str]] = []
+        unknown: list[dict[str, str]] = []
+        for site in sites:
+            item = {"name": site.name, "url": site.url, "reason": site.last_error or ""}
+            status = site.status.value if hasattr(site.status, "value") else str(site.status)
+            if status == SiteStatus.DOWN.value:
+                down.append(item)
+            elif status in (SiteStatus.UP.value, SiteStatus.SLOW.value):
+                up.append(item)
+            else:
+                unknown.append(item)
+
+        subject, body, html_body = build_client_report_email(
+            slot_label=slot_label,
+            checked_at=format_ist(),
+            down=down,
+            up=up,
+            unknown=unknown,
+        )
+        ok = await send_email(
+            db,
+            settings_row,
+            subject=subject,
+            body=body,
+            html_body=html_body,
+            kind="client_report",
+        )
+        logger.info(
+            "Client %s report sent=%s (up=%s down=%s unknown=%s)",
+            slot_label,
+            ok,
+            len(up),
+            len(down),
+            len(unknown),
         )
