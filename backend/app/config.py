@@ -25,8 +25,10 @@ class Settings(BaseSettings):
     check_retention_per_site: int = 24
     notification_retention: int = 50
     failed_email_retention_days: int = 3
-    # Wait this long after the latest down/recovery before sending one group email
+    # Wait this long after the oldest pending down/recovery before sending one group email
     digest_debounce_seconds: int = 90
+    # Suppress a new DOWN email if the same site recovered within this window (anti-flap)
+    alert_flap_cooldown_seconds: int = 1800
 
     smtp_host: str = ""
     smtp_port: int = 587

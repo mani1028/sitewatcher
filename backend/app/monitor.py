@@ -45,6 +45,9 @@ class ProbeResult:
     error_message: str | None = None
 
 
+_TRANSIENT_STATUS = {502, 503, 504}
+
+
 async def _probe_url(
     url: str,
     *,
@@ -64,6 +67,7 @@ async def _probe_url(
         async with httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=follow_redirects,
+            max_redirects=5,
             verify=True,
             headers={"User-Agent": "SiteWatch/1.0", "Accept": "application/json, text/html, */*"},
         ) as client:
@@ -77,6 +81,15 @@ async def _probe_url(
                 error_type=None if ok else "unexpected_status",
                 error_message=None if ok else f"{label}: expected {expected_status}, got {response.status_code}",
             )
+    except httpx.TooManyRedirects:
+        elapsed_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
+        return ProbeResult(
+            False,
+            None,
+            round(elapsed_ms, 2),
+            "redirect_loop",
+            f"{label}: redirect loop (exceeded 5 redirects)",
+        )
     except httpx.TimeoutException:
         elapsed_ms = (datetime.now(timezone.utc) - started).total_seconds() * 1000
         return ProbeResult(False, None, round(elapsed_ms, 2), "timeout", f"{label}: connection timeout")
@@ -84,6 +97,40 @@ async def _probe_url(
         return ProbeResult(False, None, None, "connection", f"{label}: {str(exc)[:380]}")
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(False, None, None, "error", f"{label}: {str(exc)[:380]}")
+
+
+async def _probe_url_resilient(
+    url: str,
+    *,
+    timeout_sec: int,
+    expected_status: int,
+    follow_redirects: bool = True,
+    label: str = "URL",
+    retries: int = 1,
+) -> ProbeResult:
+    """Retry once on transient gateway errors / timeouts (common for health APIs)."""
+    result = await _probe_url(
+        url,
+        timeout_sec=timeout_sec,
+        expected_status=expected_status,
+        follow_redirects=follow_redirects,
+        label=label,
+    )
+    if result.ok or retries <= 0:
+        return result
+    transient = result.error_type == "timeout" or (
+        result.status_code is not None and result.status_code in _TRANSIENT_STATUS
+    )
+    if not transient:
+        return result
+    await asyncio.sleep(2.0)
+    return await _probe_url(
+        url,
+        timeout_sec=timeout_sec,
+        expected_status=expected_status,
+        follow_redirects=follow_redirects,
+        label=label,
+    )
 
 
 async def probe_website(website: Website) -> ProbeResult:
@@ -102,13 +149,14 @@ async def probe_website(website: Website) -> ProbeResult:
             primary.error_message = primary.error_message.removeprefix("Frontend: ")
         return primary
 
-    secondary = await _probe_url(
+    secondary = await _probe_url_resilient(
         health,
         timeout_sec=website.timeout,
         expected_status=website.expected_status,
         # Don't treat a login-page redirect as a healthy API
         follow_redirects=False,
         label="Backend/API",
+        retries=1,
     )
 
     times = [t for t in (primary.response_time_ms, secondary.response_time_ms) if t is not None]
@@ -247,6 +295,10 @@ async def process_website(db: AsyncSession, website: Website, settings_row: Sett
                 open_incident.status = IncidentStatus.RESOLVED
                 open_incident.resolved_at = now
                 open_incident.duration_seconds = int((now - open_incident.started_at).total_seconds())
+                # Drop sub-2-minute blips from the digest entirely (down + recovery)
+                if not open_incident.notification_sent and (open_incident.duration_seconds or 0) < 120:
+                    open_incident.notification_sent = True
+                    open_incident.recovery_notification_sent = True
                 # Email is batched after the check cycle (see flush_alert_digest)
 
             website.status = SiteStatus.SLOW if check_status == CheckStatus.SLOW else SiteStatus.UP
@@ -267,11 +319,39 @@ async def process_website(db: AsyncSession, website: Website, settings_row: Sett
                 )
                 if not open_incident:
                     reason = result.error_message or result.error_type or "Website unreachable"
+                    # Anti-flap: if this site just recovered, track the incident silently
+                    suppress_notify = False
+                    cooldown = max(0, settings.alert_flap_cooldown_seconds)
+                    if cooldown:
+                        last_resolved = await db.scalar(
+                            select(Incident)
+                            .where(
+                                Incident.website_id == website.id,
+                                Incident.status == IncidentStatus.RESOLVED,
+                                Incident.resolved_at.is_not(None),
+                            )
+                            .order_by(Incident.resolved_at.desc())
+                            .limit(1)
+                        )
+                        if last_resolved and last_resolved.resolved_at:
+                            resolved_at = last_resolved.resolved_at
+                            if resolved_at.tzinfo is None:
+                                resolved_at = resolved_at.replace(tzinfo=timezone.utc)
+                            if (now - resolved_at).total_seconds() < cooldown:
+                                suppress_notify = True
+                                logger.info(
+                                    "Anti-flap: suppressing down email for %s (recovered %.0fs ago)",
+                                    website.name,
+                                    (now - resolved_at).total_seconds(),
+                                )
                     incident = Incident(
                         website_id=website.id,
                         started_at=now,
                         reason=reason,
                         status=IncidentStatus.OPEN,
+                        notification_sent=suppress_notify,
+                        # If down mail is suppressed, skip recovery mail too
+                        recovery_notification_sent=suppress_notify,
                     )
                     db.add(incident)
                     # Email is batched after the check cycle (see flush_alert_digest)
@@ -306,7 +386,7 @@ async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> Non
     if not pending_downs and not pending_recoveries:
         return
 
-    # Debounce: hold briefly so sites that fail/recover in the same wave share one email
+    # Debounce on the *oldest* pending event so flapping sites can't reset the timer forever
     now = datetime.now(timezone.utc)
     event_times: list[datetime] = []
     for incident in pending_downs:
@@ -316,16 +396,20 @@ async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> Non
         if incident.resolved_at:
             event_times.append(incident.resolved_at)
     if event_times:
+        oldest = min(event_times)
         newest = max(event_times)
+        if oldest.tzinfo is None:
+            oldest = oldest.replace(tzinfo=timezone.utc)
         if newest.tzinfo is None:
             newest = newest.replace(tzinfo=timezone.utc)
-        age = (now - newest).total_seconds()
+        age = (now - oldest).total_seconds()
         debounce = max(0, settings.digest_debounce_seconds)
         if age < debounce:
             logger.info(
-                "Digest debounce: %s pending event(s), newest %.0fs ago (wait %ss)",
+                "Digest debounce: %s pending event(s), oldest %.0fs ago / newest %.0fs ago (wait %ss)",
                 len(pending_downs) + len(pending_recoveries),
                 age,
+                (now - newest).total_seconds(),
                 debounce,
             )
             return
