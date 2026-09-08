@@ -68,6 +68,10 @@ class Website(Base):
     expected_status: Mapped[int] = mapped_column(Integer, default=200)
     monitor_ssl: Mapped[bool] = mapped_column(Boolean, default=True)
     maintenance_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Opt-in WhatsApp alerts for this site (global WhatsApp must also be enabled)
+    whatsapp_alerts: Mapped[bool] = mapped_column(Boolean, default=False)
+    # While DOWN/FAILING, re-check every ~30s instead of the normal interval
+    high_priority: Mapped[bool] = mapped_column(Boolean, default=False)
 
     status: Mapped[SiteStatus] = mapped_column(
         Enum(SiteStatus, name="site_status"), default=SiteStatus.UNKNOWN
@@ -145,6 +149,17 @@ class SettingsRow(Base):
     smtp_password: Mapped[str] = mapped_column(String(255), default="")
     smtp_from: Mapped[str] = mapped_column(String(255), default="SiteWatch <alerts@yourdomain.com>")
     smtp_use_tls: Mapped[bool] = mapped_column(Boolean, default=True)
+    # WhatsApp Cloud API (Meta)
+    whatsapp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    whatsapp_phone_number_id: Mapped[str] = mapped_column(String(64), default="")  # legacy Meta
+    whatsapp_display_number: Mapped[str] = mapped_column(String(32), default="")
+    whatsapp_access_token: Mapped[str] = mapped_column(String(500), default="")  # legacy Meta
+    whatsapp_recipients: Mapped[str] = mapped_column(String(2000), default="")
+    whatsapp_owner_scope: Mapped[str] = mapped_column(String(32), default="inhouse")
+    whatsapp_template_name: Mapped[str] = mapped_column(String(128), default="")
+    whatsapp_template_lang: Mapped[str] = mapped_column(String(16), default="en")
+    plivo_auth_id: Mapped[str] = mapped_column(String(64), default="")
+    plivo_auth_token: Mapped[str] = mapped_column(String(255), default="")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

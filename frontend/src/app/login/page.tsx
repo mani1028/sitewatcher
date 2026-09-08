@@ -1,20 +1,29 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Activity } from "lucide-react";
 import { api, isLoggedIn, setToken } from "@/lib/api";
 
-export default function LoginPage() {
+function safeReturnTo(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/login")) {
+    return "/dashboard";
+  }
+  return raw;
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = safeReturnTo(searchParams.get("returnTo"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (isLoggedIn()) router.replace("/dashboard");
-  }, [router]);
+    if (isLoggedIn()) router.replace(returnTo);
+  }, [router, returnTo]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -23,7 +32,7 @@ export default function LoginPage() {
     try {
       const res = await api.login(email, password);
       setToken(res.access_token);
-      router.push("/dashboard");
+      router.push(returnTo);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -71,5 +80,17 @@ export default function LoginPage() {
         </form>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center text-ink-mute">Loading…</div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -15,10 +15,12 @@ from app.database import SessionLocal
 from app.email_service import (
     build_client_report_email,
     build_digest_email,
+    failure_layer,
     format_duration,
     format_ist,
     send_email,
 )
+from app.whatsapp_service import send_whatsapp_digest
 from app.models import (
     Check,
     CheckStatus,
@@ -244,11 +246,11 @@ async def recompute_uptime(db: AsyncSession, website_id: int) -> float:
 
 async def process_website(db: AsyncSession, website: Website, settings_row: SettingsRow) -> None:
     now = datetime.now(timezone.utc)
-    website.next_check_at = now + timedelta(seconds=website.check_interval)
 
     if website.maintenance_mode:
         website.status = SiteStatus.MAINTENANCE
         website.last_checked_at = now
+        website.next_check_at = now + timedelta(seconds=website.check_interval)
         await db.commit()
         return
 
@@ -356,6 +358,14 @@ async def process_website(db: AsyncSession, website: Website, settings_row: Sett
                     db.add(incident)
                     # Email is batched after the check cycle (see flush_alert_digest)
 
+    # High priority: poll every ~30s while DOWN or still accumulating failures (FAILING)
+    interval = website.check_interval
+    if bool(getattr(website, "high_priority", False)):
+        failing = website.status == SiteStatus.DOWN or website.consecutive_failures > 0
+        if failing:
+            interval = max(15, int(settings.high_priority_check_interval or 30))
+    website.next_check_at = now + timedelta(seconds=interval)
+
     website.uptime_percent = await recompute_uptime(db, website.id)
     await db.commit()
 
@@ -440,6 +450,9 @@ async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> Non
                 "name": site.name,
                 "url": site.url,
                 "reason": incident.reason,
+                "layer": failure_layer(incident.reason),
+                "owner": (site.owner.value if hasattr(site.owner, "value") else site.owner) or "inhouse",
+                "whatsapp_alerts": bool(getattr(site, "whatsapp_alerts", False)),
                 "detected_at": format_ist(incident.started_at),
             }
         )
@@ -453,6 +466,8 @@ async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> Non
             {
                 "name": site.name,
                 "url": site.url,
+                "owner": (site.owner.value if hasattr(site.owner, "value") else site.owner) or "inhouse",
+                "whatsapp_alerts": bool(getattr(site, "whatsapp_alerts", False)),
                 "downtime": format_duration(incident.duration_seconds),
                 "recovered_at": format_ist(incident.resolved_at),
             }
@@ -463,14 +478,22 @@ async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> Non
         site = sites.get(incident.website_id)
         if not site:
             continue
-        still_down.append({"name": site.name, "url": site.url, "reason": incident.reason})
+        still_down.append(
+            {
+                "name": site.name,
+                "url": site.url,
+                "reason": incident.reason,
+                "layer": failure_layer(incident.reason),
+                "owner": (site.owner.value if hasattr(site.owner, "value") else site.owner) or "inhouse",
+            }
+        )
 
     subject, body, html_body = build_digest_email(
         downs=downs,
         recoveries=recoveries,
         still_down=still_down,
     )
-    ok = await send_email(
+    email_ok = await send_email(
         db,
         settings_row,
         subject=subject,
@@ -478,7 +501,16 @@ async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> Non
         html_body=html_body,
         kind="digest",
     )
-    if not ok:
+    wa_ok = await send_whatsapp_digest(
+        db,
+        settings_row,
+        downs=downs,
+        recoveries=recoveries,
+        subject=subject,
+    )
+    # Mark notified if at least one channel delivered. If both are off/misconfigured,
+    # email_ok is False and wa_ok is False — keep pending for retry when SMTP works.
+    if not email_ok and not wa_ok:
         return
 
     for incident in pending_downs:
@@ -487,9 +519,11 @@ async def flush_alert_digest(db: AsyncSession, settings_row: SettingsRow) -> Non
         incident.recovery_notification_sent = True
     await db.commit()
     logger.info(
-        "Sent group digest: %s down, %s recovered (subject=%s)",
+        "Sent group digest: %s down, %s recovered (email=%s whatsapp=%s subject=%s)",
         len(downs),
         len(recoveries),
+        email_ok,
+        wa_ok,
         subject,
     )
 

@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Protected } from "@/components/Protected";
 import { StatusDot } from "@/components/StatusDot";
 import { api, Incident } from "@/lib/api";
 import { formatDuration, formatTime } from "@/lib/format";
@@ -26,7 +25,6 @@ export default function IncidentsPage() {
   }, [load]);
 
   return (
-    <Protected>
       <div className="animate-rise space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between sm:gap-4">
           <div>
@@ -82,6 +80,5 @@ export default function IncidentsPage() {
           )}
         </div>
       </div>
-    </Protected>
   );
 }

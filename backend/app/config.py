@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     digest_debounce_seconds: int = 90
     # Suppress a new DOWN email if the same site recovered within this window (anti-flap)
     alert_flap_cooldown_seconds: int = 1800
+    # High-priority sites: re-check this often while DOWN / FAILING
+    high_priority_check_interval: int = 30
 
     smtp_host: str = ""
     smtp_port: int = 587

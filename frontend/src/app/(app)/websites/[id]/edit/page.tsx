@@ -3,7 +3,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { BackLink } from "@/components/BackLink";
-import { Protected } from "@/components/Protected";
 import { api, SiteCategory, SiteOwner } from "@/lib/api";
 import { SITE_CATEGORIES, SITE_OWNERS } from "@/lib/categories";
 
@@ -23,6 +22,8 @@ export default function EditWebsitePage() {
   const [monitorSsl, setMonitorSsl] = useState(true);
   const [enabled, setEnabled] = useState(true);
   const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [whatsappAlerts, setWhatsappAlerts] = useState(false);
+  const [highPriority, setHighPriority] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
@@ -42,6 +43,8 @@ export default function EditWebsitePage() {
         setMonitorSsl(site.monitor_ssl);
         setEnabled(site.enabled);
         setMaintenanceMode(site.maintenance_mode);
+        setWhatsappAlerts(Boolean(site.whatsapp_alerts));
+        setHighPriority(Boolean(site.high_priority));
         setReady(true);
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"));
@@ -64,6 +67,8 @@ export default function EditWebsitePage() {
         monitor_ssl: monitorSsl,
         enabled,
         maintenance_mode: maintenanceMode,
+        whatsapp_alerts: whatsappAlerts,
+        high_priority: highPriority,
       });
       router.push(`/websites/${id}`);
     } catch (err) {
@@ -74,9 +79,8 @@ export default function EditWebsitePage() {
   }
 
   return (
-    <Protected>
       <div className="mx-auto max-w-2xl animate-rise space-y-5 sm:space-y-6">
-        <BackLink href={`/websites/${id}`} label="Back to site" />
+        <BackLink href={`/websites/${id}`} label="Back" />
 
         <div>
           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink-mute sm:text-xs">
@@ -177,7 +181,7 @@ export default function EditWebsitePage() {
                 </Field>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <Toggle
                   label="Monitor SSL"
                   checked={monitorSsl}
@@ -192,6 +196,18 @@ export default function EditWebsitePage() {
                   label="Maintenance"
                   checked={maintenanceMode}
                   onChange={setMaintenanceMode}
+                />
+                <Toggle
+                  label="WhatsApp alerts"
+                  checked={whatsappAlerts}
+                  onChange={setWhatsappAlerts}
+                  hint="Off by default. Needs WhatsApp enabled in Settings."
+                />
+                <Toggle
+                  label="High priority"
+                  checked={highPriority}
+                  onChange={setHighPriority}
+                  hint="While down, re-check every 30 seconds. Critical sites only."
                 />
               </div>
             </section>
@@ -213,7 +229,6 @@ export default function EditWebsitePage() {
           </form>
         )}
       </div>
-    </Protected>
   );
 }
 
@@ -230,20 +245,25 @@ function Toggle({
   label,
   checked,
   onChange,
+  hint,
 }: {
   label: string;
   checked: boolean;
   onChange: (value: boolean) => void;
+  hint?: string;
 }) {
   return (
-    <label className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-ink/8 bg-white/60 px-3.5 py-3 text-sm text-ink transition hover:bg-white">
+    <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-ink/8 bg-white/60 px-3.5 py-3 text-sm text-ink transition hover:bg-white">
       <input
         type="checkbox"
         checked={checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="h-4 w-4 rounded border-ink/20 text-teal"
+        className="mt-0.5 h-4 w-4 rounded border-ink/20 text-teal"
       />
-      {label}
+      <span>
+        {label}
+        {hint ? <span className="mt-0.5 block text-xs text-ink-mute">{hint}</span> : null}
+      </span>
     </label>
   );
 }

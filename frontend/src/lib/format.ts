@@ -22,6 +22,18 @@ export function shortError(message: string | null | undefined): string {
   return clean.length > 42 ? `${clean.slice(0, 40)}…` : clean;
 }
 
+/** Classify probe failure as Frontend / Backend/API / both. */
+export function failureLayer(reason: string | null | undefined): string {
+  const text = (reason || "").toLowerCase();
+  const front = text.includes("frontend");
+  const back =
+    text.includes("backend/api") || text.includes("backend:") || text.includes("/api") || text.includes("health");
+  if (front && back) return "Frontend + Backend/API";
+  if (front) return "Frontend";
+  if (back) return "Backend/API";
+  return "Site";
+}
+
 export function formatDuration(seconds: number | null | undefined) {
   if (seconds == null) return "—";
   const mins = Math.floor(seconds / 60);

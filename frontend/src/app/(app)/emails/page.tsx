@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { Protected } from "@/components/Protected";
 import { api, NotificationLog, NotificationPage } from "@/lib/api";
 import { formatTime } from "@/lib/format";
 
@@ -73,7 +73,6 @@ export default function EmailsPage() {
   }
 
   return (
-    <Protected>
       <div className="animate-rise space-y-5 sm:space-y-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -87,12 +86,17 @@ export default function EmailsPage() {
               Sent alerts and tests. Failed emails are removed after 10 days.
             </p>
           </div>
-          {data && (
-            <p className="text-xs text-ink-mute sm:text-sm">
-              {data.total} {data.total === 1 ? "email" : "emails"}
-              {data.pages > 1 ? ` · page ${data.page}/${data.pages}` : ""}
-            </p>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href="/settings" className="btn-secondary h-9 px-3 text-sm">
+              Settings
+            </Link>
+            {data && (
+              <p className="text-xs text-ink-mute sm:text-sm">
+                {data.total} {data.total === 1 ? "email" : "emails"}
+                {data.pages > 1 ? ` · page ${data.page}/${data.pages}` : ""}
+              </p>
+            )}
+          </div>
         </div>
 
         <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0">
@@ -192,6 +196,5 @@ export default function EmailsPage() {
           </div>
         )}
       </div>
-    </Protected>
   );
 }

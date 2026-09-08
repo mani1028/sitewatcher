@@ -60,6 +60,20 @@ def format_duration(seconds: int | None) -> str:
     return f"{secs}s"
 
 
+def failure_layer(reason: str | None) -> str:
+    """Classify probe failure as Frontend, Backend/API, Both, or Site."""
+    text = (reason or "").lower()
+    front = "frontend" in text
+    back = "backend/api" in text or "backend:" in text or "/api" in text or "health" in text
+    if front and back:
+        return "Frontend + Backend/API"
+    if front:
+        return "Frontend"
+    if back:
+        return "Backend/API"
+    return "Site"
+
+
 def _dashboard_url(website_id: int | None = None) -> str:
     base = get_settings().frontend_url.rstrip("/")
     if website_id:
@@ -205,7 +219,8 @@ def build_digest_email(
     if downs:
         text_lines.append(f"DOWN ({len(downs)})")
         for item in downs:
-            text_lines.append(f"- {item['name']} — {item['url']}")
+            layer = item.get("layer") or failure_layer(item.get("reason"))
+            text_lines.append(f"- {item['name']} [{layer}] — {item['url']}")
             text_lines.append(f"  Reason: {item.get('reason') or 'unreachable'}")
             if item.get("detected_at"):
                 text_lines.append(f"  Detected: {item['detected_at']}")
@@ -223,7 +238,8 @@ def build_digest_email(
     if other_still:
         text_lines.append(f"STILL DOWN ({len(other_still)})")
         for item in other_still:
-            text_lines.append(f"- {item['name']} — {item['url']}")
+            layer = item.get("layer") or failure_layer(item.get("reason"))
+            text_lines.append(f"- {item['name']} [{layer}] — {item['url']}")
             if item.get("reason"):
                 text_lines.append(f"  Reason: {item['reason']}")
         text_lines.append("")
@@ -237,6 +253,7 @@ def build_digest_email(
             [
                 _status_pill("Down", "#dc2626"),
                 _site_cell(item["name"], item["url"]),
+                html.escape(item.get("layer") or failure_layer(item.get("reason"))),
                 html.escape(_short_cell(item.get("reason") or "unreachable", 90)),
                 html.escape(item.get("detected_at") or "—"),
             ]
@@ -245,7 +262,7 @@ def build_digest_email(
         sections.append(
             f"""
             <tr><td style="padding:8px 24px 4px;font-size:12px;font-weight:600;color:#dc2626;">Down · {len(downs)}</td></tr>
-            <tr><td style="padding:0 24px 16px;">{_data_table(["Status", "Site", "Reason", "Detected"], rows, accent="#dc2626")}</td></tr>
+            <tr><td style="padding:0 24px 16px;">{_data_table(["Status", "Site", "Layer", "Reason", "Detected"], rows, accent="#dc2626")}</td></tr>
             """
         )
 
@@ -271,6 +288,7 @@ def build_digest_email(
             [
                 _status_pill("Still down", "#b45309"),
                 _site_cell(item["name"], item["url"]),
+                html.escape(item.get("layer") or failure_layer(item.get("reason"))),
                 html.escape(_short_cell(item.get("reason") or "—", 90)),
             ]
             for item in other_still
@@ -278,7 +296,7 @@ def build_digest_email(
         sections.append(
             f"""
             <tr><td style="padding:8px 24px 4px;font-size:12px;font-weight:600;color:#b45309;">Still down · {len(other_still)}</td></tr>
-            <tr><td style="padding:0 24px 16px;">{_data_table(["Status", "Site", "Reason"], rows, accent="#b45309")}</td></tr>
+            <tr><td style="padding:0 24px 16px;">{_data_table(["Status", "Site", "Layer", "Reason"], rows, accent="#b45309")}</td></tr>
             """
         )
 

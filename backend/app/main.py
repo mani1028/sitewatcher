@@ -37,6 +37,21 @@ async def ensure_schema() -> None:
         "ALTER TABLE websites ADD COLUMN IF NOT EXISTS category VARCHAR(32) DEFAULT 'website'",
         "ALTER TABLE websites ADD COLUMN IF NOT EXISTS owner VARCHAR(32) DEFAULT 'inhouse'",
         "ALTER TABLE websites ADD COLUMN IF NOT EXISTS health_url VARCHAR(500)",
+        "ALTER TABLE websites ADD COLUMN IF NOT EXISTS whatsapp_alerts BOOLEAN DEFAULT false",
+        "UPDATE websites SET whatsapp_alerts = false WHERE whatsapp_alerts IS NULL",
+        "ALTER TABLE websites ADD COLUMN IF NOT EXISTS high_priority BOOLEAN DEFAULT false",
+        "UPDATE websites SET high_priority = false WHERE high_priority IS NULL",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_enabled BOOLEAN DEFAULT false",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_phone_number_id VARCHAR(64) DEFAULT ''",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_display_number VARCHAR(32) DEFAULT ''",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_access_token VARCHAR(500) DEFAULT ''",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_recipients VARCHAR(2000) DEFAULT ''",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_owner_scope VARCHAR(32) DEFAULT 'inhouse'",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_template_name VARCHAR(128) DEFAULT ''",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS whatsapp_template_lang VARCHAR(16) DEFAULT 'en'",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS plivo_auth_id VARCHAR(64) DEFAULT ''",
+        "ALTER TABLE settings ADD COLUMN IF NOT EXISTS plivo_auth_token VARCHAR(255) DEFAULT ''",
+        "UPDATE settings SET whatsapp_display_number = '+1 346 480 2677' WHERE id = 1 AND (whatsapp_display_number IS NULL OR whatsapp_display_number = '')",
         # Heuristic backfill for existing rows still on default
         """
         UPDATE websites SET category = 'portal'

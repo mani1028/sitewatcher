@@ -42,7 +42,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <nav className="ml-2 hidden items-center gap-0.5 md:flex">
             {NAV.map((item) => {
-              const active = pathname.startsWith(item.href);
+              const active =
+                item.href === "/dashboard"
+                  ? pathname.startsWith("/dashboard") || pathname.startsWith("/websites")
+                  : pathname.startsWith(item.href);
               return (
                 <Link
                   key={item.href}
@@ -86,7 +89,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-ink/8 bg-white/90 backdrop-blur-md md:hidden">
         <div className="mx-auto grid max-w-6xl grid-cols-4 px-1 pb-[max(0.35rem,env(safe-area-inset-bottom))] pt-1">
           {NAV.map((item) => {
-            const active = pathname.startsWith(item.href);
+            const active =
+              item.href === "/dashboard"
+                ? pathname.startsWith("/dashboard") || pathname.startsWith("/websites")
+                : pathname.startsWith(item.href);
             const Icon = item.icon;
             return (
               <Link

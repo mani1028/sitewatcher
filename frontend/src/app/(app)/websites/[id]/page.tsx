@@ -12,11 +12,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Zap } from "lucide-react";
 import { BackLink } from "@/components/BackLink";
-import { Protected } from "@/components/Protected";
 import { StatusDot } from "@/components/StatusDot";
+import { WhatsAppIcon } from "@/components/WhatsAppIcon";
 import { api, Check, Incident, Website } from "@/lib/api";
-import { formatDuration, formatMs, formatTime, intervalLabel, statusLabel, displayStatus } from "@/lib/format";
+import { formatDuration, formatMs, formatTime, intervalLabel, statusLabel, displayStatus, failureLayer } from "@/lib/format";
 import { categoryLabel, ownerBadgeClass, ownerLabel } from "@/lib/categories";
 
 export default function WebsiteDetailPage() {
@@ -79,56 +80,84 @@ export default function WebsiteDetailPage() {
   }
 
   return (
-    <Protected>
+    <>
       {!site ? (
         <p className="text-ink-mute">{error || "Loading…"}</p>
       ) : (
         <div className="animate-rise space-y-6 sm:space-y-8">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0 space-y-3">
-              <BackLink href="/dashboard" label="Back to dashboard" />
-              <div className="flex flex-wrap items-center gap-3">
-                <StatusDot
-                  status={displayStatus(site)}
-                  pulse={displayStatus(site) === "DOWN" || displayStatus(site) === "FAILING"}
-                  className="h-3 w-3"
-                />
-                <h1 className="font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
-                  {site.name}
-                </h1>
-                <span
-                  className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${ownerBadgeClass(site.owner)}`}
-                >
-                  {ownerLabel(site.owner)}
-                </span>
-                <span className="rounded-full bg-mist-deep px-2.5 py-0.5 text-[11px] font-medium text-ink-soft">
-                  {categoryLabel(site.category)}
-                </span>
-              </div>
-              <p className="font-mono text-sm text-ink-mute">{site.url}</p>
-              {site.health_url ? (
-                <p className="font-mono text-xs text-ink-mute">
-                  Health: {site.health_url}
+          <div className="space-y-4">
+            <BackLink href="/dashboard" label="Back" />
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0 space-y-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <StatusDot
+                    status={displayStatus(site)}
+                    pulse={displayStatus(site) === "DOWN" || displayStatus(site) === "FAILING"}
+                    className="h-3 w-3"
+                  />
+                  <h1 className="font-display text-2xl font-semibold tracking-tight text-ink sm:text-3xl">
+                    {site.name}
+                  </h1>
+                  {site.high_priority ? (
+                    <span
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-amber-700"
+                      title="High priority — re-checks every 30s while down"
+                      aria-label="High priority"
+                    >
+                      <Zap className="h-4 w-4" />
+                    </span>
+                  ) : null}
+                  {site.whatsapp_alerts ? (
+                    <span
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-[#25D366]/15 text-[#25D366]"
+                      title="WhatsApp alerts enabled"
+                      aria-label="WhatsApp alerts enabled"
+                    >
+                      <WhatsAppIcon className="h-4 w-4" />
+                    </span>
+                  ) : null}
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${ownerBadgeClass(site.owner)}`}
+                  >
+                    {ownerLabel(site.owner)}
+                  </span>
+                  <span className="rounded-full bg-mist-deep px-2.5 py-0.5 text-[11px] font-medium text-ink-soft">
+                    {categoryLabel(site.category)}
+                  </span>
+                </div>
+                <p className="font-mono text-sm text-ink-mute">{site.url}</p>
+                {site.health_url ? (
+                  <p className="font-mono text-xs text-ink-mute">Health: {site.health_url}</p>
+                ) : null}
+                <p className="text-sm text-ink-soft">
+                  {statusLabel(displayStatus(site))}
+                  {displayStatus(site) === "RECOVERING" && site.consecutive_successes
+                    ? ` (${site.consecutive_successes} ok)`
+                    : ""}{" "}
+                  · {site.uptime_percent.toFixed(2)}% uptime · checked every{" "}
+                  {intervalLabel(site.check_interval)}
+                  {site.high_priority ? " · 30s while down" : ""}
                 </p>
-              ) : null}
-              <p className="text-sm text-ink-soft">
-                {statusLabel(displayStatus(site))}
-                {displayStatus(site) === "RECOVERING" && site.consecutive_successes
-                  ? ` (${site.consecutive_successes} ok)`
-                  : ""}{" "}
-                · {site.uptime_percent.toFixed(2)}% uptime · checked every {intervalLabel(site.check_interval)}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Link href={`/websites/${site.id}/edit`} className="btn-primary h-10 px-4">
-                Edit
-              </Link>
-              <button className="btn-secondary" onClick={toggleMaintenance} disabled={saving}>
-                {site.maintenance_mode ? "Exit maintenance" : "Maintenance mode"}
-              </button>
-              <button className="btn-danger" onClick={removeSite}>
-                Delete
-              </button>
+                {(displayStatus(site) === "DOWN" || displayStatus(site) === "FAILING") && site.last_error ? (
+                  <p className="text-sm text-alert-down">
+                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-alert-down">
+                      {failureLayer(site.last_error)}
+                    </span>{" "}
+                    {site.last_error}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Link href={`/websites/${site.id}/edit`} className="btn-primary h-10 px-4">
+                  Edit
+                </Link>
+                <button className="btn-secondary" onClick={toggleMaintenance} disabled={saving}>
+                  {site.maintenance_mode ? "Exit maintenance" : "Maintenance mode"}
+                </button>
+                <button className="btn-danger" onClick={removeSite}>
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
 
@@ -222,7 +251,7 @@ export default function WebsiteDetailPage() {
           </section>
         </div>
       )}
-    </Protected>
+    </>
   );
 }
 

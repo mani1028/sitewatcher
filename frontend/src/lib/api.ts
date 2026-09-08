@@ -16,6 +16,8 @@ export type Website = {
   expected_status: number;
   monitor_ssl: boolean;
   maintenance_mode: boolean;
+  whatsapp_alerts?: boolean;
+  high_priority?: boolean;
   status: "UP" | "DOWN" | "SLOW" | "UNKNOWN" | "MAINTENANCE";
   consecutive_failures: number;
   consecutive_successes: number;
@@ -75,7 +77,21 @@ export type Settings = {
   smtp_user: string;
   smtp_from: string;
   smtp_use_tls: boolean;
+  smtp_password?: string;
   smtp_configured: boolean;
+  whatsapp_enabled: boolean;
+  whatsapp_phone_number_id?: string;
+  whatsapp_display_number: string;
+  whatsapp_recipients: string;
+  whatsapp_owner_scope: "inhouse" | "client" | "all";
+  whatsapp_template_name: string;
+  whatsapp_template_lang: string;
+  whatsapp_token_configured?: boolean;
+  whatsapp_configured: boolean;
+  plivo_auth_id: string;
+  plivo_auth_token?: string;
+  plivo_token_configured: boolean;
+  whatsapp_webhook_url: string;
 };
 
 export type NotificationLog = {
@@ -132,7 +148,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (res.status === 401) {
     clearToken();
     if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
-      window.location.href = "/login";
+      const returnTo = `${window.location.pathname}${window.location.search}`;
+      window.location.href = `/login?returnTo=${encodeURIComponent(returnTo)}`;
     }
     throw new Error("Unauthorized");
   }
@@ -174,6 +191,11 @@ export const api = {
   updateSettings: (payload: Record<string, unknown>) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(payload) }),
   testEmail: () => request<{ ok: boolean }>("/settings/test-email", { method: "POST", body: "{}" }),
+  testWhatsapp: (to?: string) =>
+    request<{ ok: boolean; message?: string }>("/settings/test-whatsapp", {
+      method: "POST",
+      body: JSON.stringify(to ? { to } : {}),
+    }),
   notifications: (page = 1, limit = 20, filters?: { kind?: string; status?: string }) => {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (filters?.kind) params.set("kind", filters.kind);

@@ -3,7 +3,6 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BackLink } from "@/components/BackLink";
-import { Protected } from "@/components/Protected";
 import { api, SiteCategory, SiteOwner } from "@/lib/api";
 import { SITE_CATEGORIES, SITE_OWNERS } from "@/lib/categories";
 
@@ -18,6 +17,8 @@ export default function NewWebsitePage() {
   const [timeout, setTimeoutSec] = useState(10);
   const [expectedStatus, setExpectedStatus] = useState(200);
   const [monitorSsl, setMonitorSsl] = useState(true);
+  const [whatsappAlerts, setWhatsappAlerts] = useState(false);
+  const [highPriority, setHighPriority] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -36,6 +37,8 @@ export default function NewWebsitePage() {
         timeout,
         expected_status: expectedStatus,
         monitor_ssl: monitorSsl,
+        whatsapp_alerts: whatsappAlerts,
+        high_priority: highPriority,
       });
       router.push(`/websites/${site.id}`);
     } catch (err) {
@@ -46,9 +49,8 @@ export default function NewWebsitePage() {
   }
 
   return (
-    <Protected>
       <div className="mx-auto max-w-2xl animate-rise space-y-5 sm:space-y-6">
-        <BackLink href="/dashboard" label="Back to dashboard" />
+        <BackLink href="/dashboard" label="Back" />
 
         <div>
           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-ink-mute sm:text-xs">
@@ -169,6 +171,34 @@ export default function NewWebsitePage() {
               />
               Monitor SSL certificate
             </label>
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-ink/8 bg-white/60 px-3.5 py-3 text-sm text-ink transition hover:bg-white">
+              <input
+                type="checkbox"
+                checked={whatsappAlerts}
+                onChange={(e) => setWhatsappAlerts(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-ink/20 text-teal"
+              />
+              <span>
+                WhatsApp alerts
+                <span className="mt-0.5 block text-xs text-ink-mute">
+                  Off by default. Also needs WhatsApp enabled in Settings.
+                </span>
+              </span>
+            </label>
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-ink/8 bg-white/60 px-3.5 py-3 text-sm text-ink transition hover:bg-white">
+              <input
+                type="checkbox"
+                checked={highPriority}
+                onChange={(e) => setHighPriority(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-ink/20 text-teal"
+              />
+              <span>
+                High priority
+                <span className="mt-0.5 block text-xs text-ink-mute">
+                  While down, re-check every 30 seconds. Use for critical in-house sites only.
+                </span>
+              </span>
+            </label>
           </section>
 
           {error && <p className="text-sm text-alert-down">{error}</p>}
@@ -180,7 +210,6 @@ export default function NewWebsitePage() {
           </div>
         </form>
       </div>
-    </Protected>
   );
 }
 
